@@ -755,8 +755,16 @@ function drawCard() {
     
     // Update game state and UI based on number of cards drawn
     if (gameState.cardsDrawnThisTurn >= 2) {
+        console.log("================ DRAW CARD DEBUG ================");
+        console.log("Player has drawn 2 cards, setting hasDrawnCards to true");
+        console.log(`Before: hasDrawnCards = ${gameState.hasDrawnCards}`);
+        
         gameState.hasDrawnCards = true;
         gameState.turnState = 'canPlay';
+        
+        console.log(`After: hasDrawnCards = ${gameState.hasDrawnCards}`);
+        console.log("=================================================");
+        
         updateCenterStatus("You drew 2 cards. You can now play up to 3 cards.");
         
         // Enable the end turn button
@@ -906,6 +914,14 @@ function handleCardPlay(event) {
     console.log('handleCardPlay called with event:', event);
     
     try {
+        // Debug info for our investigation
+        console.log("======== HANDLE CARD PLAY ========");
+        console.log(`Game started: ${gameState.gameStarted}`);
+        console.log(`Current player: ${gameState.currentPlayer}`);
+        console.log(`Player perspective: ${getCurrentPlayerPerspective()}`);
+        console.log(`Has drawn cards: ${gameState.hasDrawnCards}`);
+        console.log(`Cards played this turn: ${gameState.cardsPlayedThisTurn}`);
+    
         if (!gameState.gameStarted) {
             console.log('Game not started yet');
             updateCenterStatus('Please start the game first');
@@ -920,6 +936,14 @@ function handleCardPlay(event) {
             return;
         }
         
+        // CRITICAL FIX: Check player perspective
+        if (gameState.currentPlayer !== getCurrentPlayerPerspective()) {
+            console.log(`Not current player's turn. Current: ${gameState.currentPlayer}, Perspective: ${getCurrentPlayerPerspective()}`);
+            updateCenterStatus(`It's not your turn. Current player: ${gameState.currentPlayer}`);
+            addToHistory('Cannot play card: Not your turn', getCurrentPlayerPerspective());
+            return;
+        }
+        
         // Get the element that was clicked
         const clickedElement = event.currentTarget || event.target;
         console.log('Clicked element:', clickedElement);
@@ -929,7 +953,6 @@ function handleCardPlay(event) {
             console.error('Card element does not have a card index');
             console.error('Clicked element:', clickedElement);
             console.error('Event target:', event.target);
-            addToHistory('Error: Card could not be identified', gameState.currentPlayer);
             
             // Try to recover by looking for the closest card element with data-card-index
             const closestCard = clickedElement.closest('[data-card-index]');
@@ -945,11 +968,17 @@ function handleCardPlay(event) {
                     }
                 }
             }
+            updateCenterStatus('Error: Could not identify the card you clicked');
             return;
         }
         
         // Get the index of the card in the player's hand
         const cardIndex = parseInt(clickedElement.dataset.cardIndex);
+        if (isNaN(cardIndex)) {
+            console.error('Card index is not a number:', clickedElement.dataset.cardIndex);
+            updateCenterStatus('Error: Invalid card selection');
+            return;
+        }
         
         // Debug info
         console.log(`Card index: ${cardIndex}`);
@@ -961,6 +990,7 @@ function handleCardPlay(event) {
         playCardWithIndex(cardIndex);
     } catch (error) {
         console.error('Error in handleCardPlay:', error);
+        updateCenterStatus('Error processing card play');
     }
 }
 
@@ -990,12 +1020,131 @@ function playCardWithIndex(cardIndex) {
         return;
     }
     
+    // Get the card
+    const card = gameState.players[gameState.currentPlayer].hand[cardIndex];
+    if (!card) {
+        console.error('Card not found at index:', cardIndex);
+        updateCenterStatus('Error: Card not found');
+        return;
+    }
+    
     // Play the card
-    console.log(`Playing card at index ${cardIndex}`);
-    playCard(cardIndex);
+    console.log(`Playing card at index ${cardIndex}:`, card);
+    
+    // Show action options based on card type
+    if (card.type === 'property') {
+        // For property cards, offer to play as property or money
+        showActionOptions(cardIndex, [
+            { label: `Play as Property: ${card.name || card.color}`, action: 'property' },
+            { label: `Play as Money: $${card.value}M`, action: 'money' }
+        ]);
+    } else if (card.type === 'money') {
+        // Money cards just get played directly
+        playMoneyCard(cardIndex);
+    } else if (card.type === 'action') {
+        // Action cards offer action or money options
+        showActionOptions(cardIndex, [
+            { label: `Play as Action: ${card.name || card.actionType}`, action: 'action' },
+            { label: `Play as Money: $${card.value}M`, action: 'money' }
+        ]);
+    } else {
+        // Default handling for unknown card types
+        playCard(cardIndex);
+    }
     
     // Save game state to localStorage for multi-tab play
     saveGameState();
+}
+
+// Function to show action options in a modal
+function showActionOptions(cardIndex, options) {
+    console.log(`Showing action options for card at index ${cardIndex}:`, options);
+    
+    const modalElement = document.getElementById('card-action-modal');
+    const optionsContainer = document.getElementById('card-action-options');
+    const cancelButton = document.getElementById('cancel-action-btn');
+    
+    if (!modalElement || !optionsContainer) {
+        console.error('Card action modal elements not found');
+        console.error('Modal element:', modalElement);
+        console.error('Options container:', optionsContainer);
+        updateCenterStatus('Error: Cannot show card actions');
+        return;
+    }
+    
+    // Clear previous options
+    optionsContainer.innerHTML = '';
+    
+    // Get the card
+    const card = gameState.players[gameState.currentPlayer].hand[cardIndex];
+    if (!card) {
+        console.error('Card not found for options:', cardIndex);
+        return;
+    }
+    
+    console.log('Card for options:', card);
+    
+    // Add card info
+    const cardInfo = document.createElement('div');
+    cardInfo.className = 'modal-card-info';
+    cardInfo.innerHTML = `
+        <div class="modal-card-name">${card.name || card.type} Card</div>
+        <div class="modal-card-description">${card.description || `Value: $${card.value}M`}</div>
+    `;
+    optionsContainer.appendChild(cardInfo);
+    
+    // Add option buttons
+    options.forEach(option => {
+        const button = document.createElement('button');
+        button.className = 'action-option-btn';
+        button.textContent = option.label;
+        button.onclick = function() {
+            console.log(`Option selected: ${option.action}`);
+            // Close the modal
+            closeModal(modalElement);
+            
+            // Perform the action
+            if (option.action === 'property') {
+                playPropertyCard(cardIndex);
+            } else if (option.action === 'money') {
+                playCardAsMoney(cardIndex);
+            } else if (option.action === 'action') {
+                playActionCard(cardIndex);
+            } else {
+                // Default fallback
+                playCard(cardIndex);
+            }
+            
+            // Save game state to localStorage for multi-tab play
+            if (typeof saveGameState === 'function') {
+                saveGameState();
+            }
+        };
+        optionsContainer.appendChild(button);
+    });
+    
+    // Make sure the cancel button works
+    if (cancelButton) {
+        cancelButton.onclick = function() {
+            console.log('Cancel button clicked');
+            closeModal(modalElement);
+        };
+    } else {
+        console.error('Cancel button not found in the modal');
+        
+        // Create a cancel button if it doesn't exist
+        const newCancelButton = document.createElement('button');
+        newCancelButton.className = 'cancel-action-btn';
+        newCancelButton.textContent = 'Cancel';
+        newCancelButton.onclick = function() {
+            closeModal(modalElement);
+        };
+        optionsContainer.appendChild(newCancelButton);
+    }
+    
+    // Show the modal
+    modalElement.style.display = 'flex';
+    console.log('Action options modal displayed');
 }
 
 // Update center status display (key action guidance)
@@ -1019,18 +1168,21 @@ function updateCenterStatus(message) {
 // Update player hand UI
 function updatePlayerHandUI(playerIndex) {
     console.log(`Updating player ${playerIndex} hand UI`);
-    const player = gameState.players[playerIndex - 1];
-    if (!player) {
-        console.error(`Player ${playerIndex} does not exist`);
-        return;
-    }
-
+    
+    // Get player and hand element
+    const player = gameState.players[playerIndex];
     const handElement = document.getElementById(`player${playerIndex}-hand`);
-    if (!handElement) {
-        console.error(`Hand element for player ${playerIndex} not found`);
+    
+    if (!player) {
+        console.error(`Player ${playerIndex} not found!`);
         return;
     }
-
+    
+    if (!handElement) {
+        console.error(`Hand element for player ${playerIndex} not found!`);
+        return;
+    }
+    
     // Clear existing card elements
     handElement.innerHTML = '';
     
@@ -1044,19 +1196,38 @@ function updatePlayerHandUI(playerIndex) {
     handElement.style.alignItems = 'flex-start';
     handElement.style.alignContent = 'flex-start';
     
+    // Check if hand array exists
+    if (!Array.isArray(player.hand)) {
+        console.error(`Player ${playerIndex} hand is not an array`);
+        player.hand = []; // Initialize empty hand
+        return;
+    }
+    
     // If this is the current player's perspective, show all cards in their hand
     if (playerIndex === getCurrentPlayerPerspective()) {
         console.log(`Showing ${player.hand.length} cards for player ${playerIndex}`);
         
         // Show cards with click handlers for your own hand
-        player.hand.forEach((cardId, index) => {
-            const card = getCardById(cardId);
+        player.hand.forEach((card, index) => {
             if (!card) {
-                console.error(`Card with ID ${cardId} not found`);
+                console.error(`Null card at index ${index} for player ${playerIndex}`);
                 return;
             }
             
-            const cardElement = createCardElement(card);
+            // Get card object if it's an ID
+            const cardObj = getCardById(card);
+            if (!cardObj) {
+                console.error(`Card at index ${index} could not be found`);
+                return;
+            }
+            
+            const cardElement = createCardElement(cardObj);
+            
+            // CRITICAL FIX: Ensure data attribute for card index is set correctly
+            // Setting both ways for maximum compatibility
+            cardElement.setAttribute('data-card-index', index);
+            cardElement.dataset.cardIndex = index.toString();
+            console.log(`Setting card index ${index} on element`, cardElement);
             
             // Style to make cards more compact
             cardElement.style.width = '80px';
@@ -1064,9 +1235,24 @@ function updatePlayerHandUI(playerIndex) {
             cardElement.style.marginRight = '5px';
             cardElement.style.marginBottom = '5px';
             
-            // Determine if card is playable
-            const isCurrentPlayerTurn = gameState.currentPlayer === playerIndex;
-            const isCardPlayable = isCurrentPlayerTurn && gameState.phase === 'action' && gameState.cardsPlayedThisTurn < 3;
+            // BUGFIX: Simplified card playability logic
+            // Cards are playable when:
+            // 1. The current player matches the perspective (it's your turn)
+            // 2. The player has drawn cards
+            // 3. The player hasn't played 3 cards yet
+            const isCurrentPlayersTurn = gameState.currentPlayer === getCurrentPlayerPerspective();
+            const hasDrawnCards = gameState.hasDrawnCards;
+            const hasNotPlayedMaxCards = gameState.cardsPlayedThisTurn < 3;
+            
+            // Simplified, clearer condition
+            const isCardPlayable = isCurrentPlayersTurn && hasDrawnCards && hasNotPlayedMaxCards;
+            
+            // Debug the calculation
+            console.log(`Card playability for index ${index}:`);
+            console.log(`- Is current player's turn: ${isCurrentPlayersTurn} (currentPlayer: ${gameState.currentPlayer}, perspective: ${getCurrentPlayerPerspective()})`);
+            console.log(`- Has drawn cards: ${hasDrawnCards}`);
+            console.log(`- Has not played max cards: ${hasNotPlayedMaxCards} (played: ${gameState.cardsPlayedThisTurn})`);
+            console.log(`- Final isCardPlayable: ${isCardPlayable}`);
             
             // Apply visual styling for playable cards
             if (isCardPlayable) {
@@ -1080,17 +1266,43 @@ function updatePlayerHandUI(playerIndex) {
             
             // CRITICAL FIX: Add direct click handler to card element
             cardElement.onclick = function(event) {
-                console.log(`Card ${card.name} clicked at index ${index}`);
+                console.log("================ CARD CLICK DEBUG ================");
+                console.log(`Card clicked at index ${index}`);
+                console.log(`Game state started: ${gameState.gameStarted}`);
+                console.log(`Current player: ${gameState.currentPlayer}`);
+                console.log(`Player perspective: ${getCurrentPlayerPerspective()}`);
+                console.log(`Has drawn cards: ${gameState.hasDrawnCards}`);
+                console.log(`Cards played this turn: ${gameState.cardsPlayedThisTurn}`);
+                console.log(`isCardPlayable: ${isCardPlayable}`);
+                console.log(`Card element:`, this);
+                console.log(`Card data-card-index:`, this.getAttribute('data-card-index'));
+                console.log(`Card dataset.cardIndex:`, this.dataset.cardIndex);
                 
                 // Stop propagation to prevent parent handlers firing
                 event.stopPropagation();
                 
-                // Only allow playing cards if it's your turn and in action phase
+                // Only allow playing cards if it's playable
                 if (isCardPlayable) {
-                    console.log(`Playing card ${card.name} from hand index ${index}`);
-                    playCard(index);
+                    console.log(`Playing card from hand index ${index}`);
+                    
+                    // CRITICAL FIX: Directly call playCardWithIndex with the index
+                    // This bypasses the event.target handling in handleCardPlay
+                    playCardWithIndex(index);
                 } else {
-                    console.log(`Cannot play card ${card.name}: not your turn or already played 3 cards`);
+                    console.log("Card not playable because:");
+                    if (!gameState.hasDrawnCards) {
+                        console.log("- Player has not drawn cards yet");
+                        updateCenterStatus('You need to draw cards first before playing');
+                    } else if (gameState.cardsPlayedThisTurn >= 3) {
+                        console.log("- Already played 3 cards this turn");
+                        updateCenterStatus('You already played 3 cards this turn');
+                    } else if (gameState.currentPlayer !== getCurrentPlayerPerspective()) {
+                        console.log(`- It's not your turn. Current player: ${gameState.currentPlayer}, Your perspective: ${getCurrentPlayerPerspective()}`);
+                        updateCenterStatus('It\'s not your turn');
+                    } else {
+                        console.log("- Unknown reason");
+                        updateCenterStatus('Cannot play this card right now');
+                    }
                 }
             };
             
@@ -1785,6 +1997,53 @@ function shuffleDeck(deck) {
     return deckToShuffle;
 }
 
+// Helper function to get a card object by its ID
+function getCardById(card) {
+    // If card is already an object, return it directly
+    if (typeof card === 'object') {
+        return card;
+    }
+    
+    // Otherwise, try to find card by ID in the deck and discard pile
+    console.log('Looking for card with ID:', card);
+    
+    // Check the deck
+    for (const deckCard of gameState.deck) {
+        if (deckCard.id === card) {
+            return deckCard;
+        }
+    }
+    
+    // Check the discard pile
+    for (const discardCard of gameState.discardPile) {
+        if (discardCard.id === card) {
+            return discardCard;
+        }
+    }
+    
+    // Check player hands and properties
+    for (let playerNum = 1; playerNum <= 2; playerNum++) {
+        const player = gameState.players[playerNum];
+        
+        // Check hand
+        for (const handCard of player.hand) {
+            if (typeof handCard === 'object' && handCard.id === card) {
+                return handCard;
+            }
+        }
+        
+        // Check properties
+        for (const propCard of player.properties) {
+            if (typeof propCard === 'object' && propCard.id === card) {
+                return propCard;
+            }
+        }
+    }
+    
+    console.error('Card with ID', card, 'not found');
+    return null;
+}
+
 // Create a card element for the UI
 function createCardElement(card) {
     if (!card) {
@@ -1988,6 +2247,8 @@ function updateCardsRemaining() {
 
 // Play a property card
 function playPropertyCard(cardIndex) {
+    console.log(`Playing property card at index ${cardIndex}`);
+    
     const currentPlayer = gameState.currentPlayer;
     
     // Check if card index is valid
@@ -1998,7 +2259,7 @@ function playPropertyCard(cardIndex) {
     
     const card = gameState.players[currentPlayer].hand[cardIndex];
     
-    console.log(`Playing property card ${card.name || card.id}`);
+    console.log(`Playing property card: ${card.name || card.color}`);
     
     // Remove card from hand
     const playedCard = gameState.players[currentPlayer].hand.splice(cardIndex, 1)[0];
@@ -2021,9 +2282,9 @@ function playPropertyCard(cardIndex) {
     
     // Update history
     if (playedCard.isWildcard) {
-        addToHistory(`Player ${currentPlayer} played a wildcard property: ${playedCard.name}`, currentPlayer);
+        addToHistory(`Player ${currentPlayer} played a wildcard property: ${playedCard.name || 'Wild Card'}`, currentPlayer);
     } else {
-        addToHistory(`Player ${currentPlayer} played a property: ${playedCard.name}`, currentPlayer);
+        addToHistory(`Player ${currentPlayer} played a property: ${playedCard.name || playedCard.color}`, currentPlayer);
     }
     
     // Update game status
@@ -2031,44 +2292,11 @@ function playPropertyCard(cardIndex) {
     
     // Check win condition
     checkWinCondition();
-}
-
-// Play a money card
-function playMoneyCard(cardIndex) {
-    const currentPlayer = gameState.currentPlayer;
     
-    // Check if card index is valid
-    if (!gameState.players[currentPlayer] || !gameState.players[currentPlayer].hand || cardIndex >= gameState.players[currentPlayer].hand.length) {
-        console.error(`Invalid card index ${cardIndex} for player ${currentPlayer}`);
-        return;
+    // Save game state
+    if (typeof saveGameState === 'function') {
+        saveGameState();
     }
-    
-    const card = gameState.players[currentPlayer].hand[cardIndex];
-    
-    console.log(`Playing money card worth $${card.value}M`);
-    
-    // Remove card from hand
-    const playedCard = gameState.players[currentPlayer].hand.splice(cardIndex, 1)[0];
-    
-    // Add to money piles
-    if (!gameState.players[currentPlayer].moneyPiles[playedCard.value]) {
-        gameState.players[currentPlayer].moneyPiles[playedCard.value] = 0;
-    }
-    
-    gameState.players[currentPlayer].moneyPiles[playedCard.value]++;
-    
-    // Update game state
-    gameState.cardsPlayedThisTurn++;
-    
-    // Update UI
-    updatePlayerHandUI(currentPlayer);
-    updateMoneyPilesUI(currentPlayer);
-    
-    // Update history
-    addToHistory(`Player ${currentPlayer} played a money card worth $${playedCard.value}M`, currentPlayer);
-    
-    // Update game status
-    afterCardPlayed();
 }
 
 // Toggle player areas visibility
@@ -2395,80 +2623,109 @@ function playActionCard(cardIndex) {
         return;
     }
     
-    // Display action options in a modal
-    const modalElement = document.getElementById('card-action-modal');
-    const optionsContainer = document.getElementById('card-action-options');
+    console.log('Action card to play:', card);
     
-    if (!modalElement || !optionsContainer) {
-        console.error('Action modal elements not found');
-        return;
+    // Get the action type from the card
+    const actionType = card.action || 'generic';
+    
+    // Create options based on the type of action card
+    let options = [];
+    
+    // Based on the Monopoly Deal rules we found
+    switch (actionType) {
+        case 'pass-go':
+            options = [
+                { 
+                    label: `Play as Action: ${card.name} - Draw 2 cards`, 
+                    action: 'action',
+                    handler: function() {
+                        // Remove the card from hand
+                        const playedCard = gameState.players[currentPlayer].hand.splice(cardIndex, 1)[0];
+                        
+                        // Add to discard pile
+                        gameState.discardPile.push(playedCard);
+                        
+                        // Draw 2 cards for the Pass Go action
+                        dealCard(currentPlayer);
+                        dealCard(currentPlayer);
+                        
+                        // Update game state
+                        gameState.cardsPlayedThisTurn++;
+                        updatePlayerHandUI(currentPlayer);
+                        
+                        // Add to history
+                        addToHistory(`Player ${currentPlayer} played Pass Go and drew 2 cards`, currentPlayer);
+                    }
+                },
+                { 
+                    label: `Play as Money: $${card.value}M`,
+                    action: 'money'
+                }
+            ];
+            break;
+            
+        case 'rent':
+            // Rent cards let you charge rent based on properties you own
+            options = [
+                { 
+                    label: `Play as Rent: ${card.description || 'Charge rent'}`, 
+                    action: 'action',
+                    handler: function() {
+                        // Remove the card from hand
+                        const playedCard = gameState.players[currentPlayer].hand.splice(cardIndex, 1)[0];
+                        
+                        // Add to discard pile
+                        gameState.discardPile.push(playedCard);
+                        
+                        // Update game state
+                        gameState.cardsPlayedThisTurn++;
+                        updatePlayerHandUI(currentPlayer);
+                        
+                        // Add to history
+                        addToHistory(`Player ${currentPlayer} played a Rent card: ${card.description || 'Charge rent'}`, currentPlayer);
+                        
+                        // In a real implementation, we would now show a target selection for who to charge rent to
+                    }
+                },
+                { 
+                    label: `Play as Money: $${card.value}M`,
+                    action: 'money'
+                }
+            ];
+            break;
+            
+        default:
+            // Default handling for other action cards
+            options = [
+                { 
+                    label: `Play as Action: ${card.name || actionType}`, 
+                    action: 'action'
+                },
+                { 
+                    label: `Play as Money: $${card.value}M`,
+                    action: 'money'
+                }
+            ];
     }
     
-    // Clear previous options
-    optionsContainer.innerHTML = '';
-    
-    // Show card info
-    const cardInfo = document.createElement('div');
-    cardInfo.className = 'modal-card-info';
-    cardInfo.innerHTML = `
-        <div class="modal-card-name">${card.name || 'Action Card'}</div>
-        <div class="modal-card-description">${card.description || 'No description'}</div>
-    `;
-    optionsContainer.appendChild(cardInfo);
-    
-    // Add option to play as an action
-    const playAsActionButton = document.createElement('button');
-    playAsActionButton.className = 'action-btn';
-    playAsActionButton.textContent = `Play as Action: ${card.name}`;
-    playAsActionButton.onclick = function() {
-        // For now, just log the action and play as money (we'll implement real actions later)
-        console.log(`Action card played: ${card.name}`);
-        addToHistory(`Player ${currentPlayer} played action card: ${card.name}`, currentPlayer);
-        
-        // Remove the card from hand
-        const playedCard = gameState.players[currentPlayer].hand.splice(cardIndex, 1)[0];
-        
-        // Add to discard pile
-        gameState.discardPile.push(playedCard);
-        
-        // Update game state
-        gameState.cardsPlayedThisTurn++;
-        updatePlayerHandUI(currentPlayer);
-        closeModal(modalElement);
-        
-        // Save game state
-        if (typeof saveGameState === 'function') {
-            saveGameState();
-        }
-    };
-    optionsContainer.appendChild(playAsActionButton);
-    
-    // Add option to play as money
-    const playAsMoneyButton = document.createElement('button');
-    playAsMoneyButton.className = 'money-action-btn';
-    playAsMoneyButton.textContent = `Play as Money: $${card.value}M`;
-    playAsMoneyButton.onclick = function() {
-        playCardAsMoney(cardIndex);
-        closeModal(modalElement);
-    };
-    optionsContainer.appendChild(playAsMoneyButton);
-    
-    // Add cancel button
-    const cancelButton = document.getElementById('cancel-action-btn');
-    if (cancelButton) {
-        cancelButton.onclick = function() {
-            closeModal(modalElement);
-        };
-    }
-    
-    // Show the modal
-    modalElement.style.display = 'flex';
-    console.log('Action card modal displayed');
+    // Use the showActionOptions function to display the modal
+    showActionOptions(cardIndex, options);
 }
 
 // Helper function to close modal
 function closeModal(modalElement) {
-    if (modalElement) {
+    console.log('Closing modal:', modalElement);
+    
+    if (!modalElement) {
+        console.error('Cannot close modal: Modal element is null or undefined');
+        return;
+    }
+    
+    try {
+        // Hide the modal
         modalElement.style.display = 'none';
+        console.log('Modal closed successfully');
+    } catch (error) {
+        console.error('Error closing modal:', error);
     }
 }
